@@ -1,17 +1,35 @@
-FROM python:3.10-slim
+FROM python:3.10-alpine
 
-# Создание рабочей директории
+# Create working directory
 WORKDIR /app
 
-# Копирование файлов зависимостей
+# Copy dependency files
 COPY requirements.txt .
 
-# Установка Python зависимостей
-RUN pip install --no-cache-dir -r requirements.txt
+# Create a minimal requirements file by excluding packages that need compilation
+RUN grep -v "sentencepiece==" requirements.txt | \
+    grep -v "llama-cpp-python==" | \
+    grep -v "ctransformers==" | \
+    grep -v "torch==" | \
+    grep -v "tokenizers==" | \
+    grep -v "transformers==" | \
+    grep -v "accelerate==" > requirements_minimal.txt
 
-# Копирование исходного кода
+# Install minimal Alpine build tools
+RUN apk add --no-cache --virtual .build-deps gcc musl-dev
+
+# Install basic Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements_minimal.txt && \
+    # Remove build dependencies
+    apk del .build-deps
+
+# Copy source code
 COPY bot.py .
 COPY settings.ini .
 
-# Запуск бота
-CMD ["python", "bot.py"] 
+# Add a stub for handling LLM calls
+RUN echo 'print("Warning: Running in minimal mode, LLM features disabled")' >> stub_llm.py
+
+# Run bot
+CMD ["python", "bot.py"]
