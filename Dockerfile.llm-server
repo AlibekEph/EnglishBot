@@ -1,23 +1,47 @@
 FROM python:3.12-slim
-# Установка системных зависимостей
 
-# Создание рабочей директории
+# Install system dependencies with proper authentication handling
+RUN apt-get update --allow-insecure-repositories && \
+    apt-get install -y --no-install-recommends --allow-unauthenticated \
+    gnupg \
+    dirmngr \
+    ca-certificates \
+    && apt-get update --allow-insecure-repositories && \
+    apt-get install -y --no-install-recommends --allow-unauthenticated \
+    build-essential \
+    cmake \
+    pkg-config \
+    python3-dev \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create working directory
 WORKDIR /app
 
-# Копирование файлов зависимостей
+# Copy dependency files
 COPY requirements.txt .
 
-# Установка Python зависимостей
-RUN pip install --no-cache-dir -r requirements.txt
+# Modify requirements to use compatible versions for problematic packages
+RUN sed -i 's/sentencepiece==0.1.99/sentencepiece==0.1.97/g' requirements.txt && \
+    sed -i 's/llama-cpp-python==0.2.23/llama-cpp-python==0.2.19/g' requirements.txt
 
-# Создание директории для моделей
+# Install Python dependencies with special handling for problematic packages
+RUN pip install --no-cache-dir --upgrade pip && \
+    # Install pre-built versions first
+    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir sentencepiece==0.1.97 && \
+    LLAMA_SUPPORTS_METAL=0 pip install --no-cache-dir llama-cpp-python==0.2.19 && \
+    # Install the rest of the requirements
+    pip install --no-cache-dir -r requirements.txt --ignore-installed sentencepiece llama-cpp-python
+
+# Create directory for models
 RUN mkdir -p /app/models
 
-# Копирование исходного кода
+# Copy source code
 COPY local_llm_server.py .
 
-# Открытие порта
+# Expose port
 EXPOSE 8000
 
-# Запуск сервера
-CMD ["python", "local_llm_server.py"] 
+# Run server
+CMD ["python", "local_llm_server.py"]
