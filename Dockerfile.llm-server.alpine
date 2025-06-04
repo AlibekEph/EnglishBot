@@ -1,0 +1,29 @@
+FROM python:3.10-alpine
+
+# Установка системных зависимостей
+RUN apk add --no-cache \
+    build-base \
+    git \
+    wget \
+    linux-headers
+
+# Создание рабочей директории
+WORKDIR /app
+
+# Копирование файлов зависимостей
+COPY requirements.txt .
+
+# Установка Python зависимостей
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Создание директории для моделей
+RUN mkdir -p /app/models
+
+# Копирование исходного кода
+COPY local_llm_server.py .
+
+# Открытие порта
+EXPOSE 8000
+
+# Запуск сервера
+CMD ["python", "local_llm_server.py"] 

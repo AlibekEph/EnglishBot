@@ -1,0 +1,17 @@
+FROM python:3.10-slim
+
+# Создание рабочей директории
+WORKDIR /app
+
+# Копирование файлов зависимостей
+COPY requirements.txt .
+
+# Установка Python зависимостей
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Копирование исходного кода
+COPY bot.py .
+COPY settings.ini .
+
+# Запуск бота
+CMD ["python", "bot.py"] 

@@ -1,0 +1,18 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+python-telegram-bot==20.7
+python-dotenv==1.0.0
+openai==1.12.0
+anthropic==0.18.1
+configparser==6.0.1
+requests==2.31.0
+language-tool-python==2.7.1
+transformers==4.37.2
+torch==2.7.1
+accelerate==0.27.2
+sentencepiece==0.1.99
+protobuf==4.25.2
+ctransformers==0.2.27
+llama-cpp-python==0.2.23
+fastapi==0.109.2
+uvicorn==0.27.1
+pydantic==2.6.1

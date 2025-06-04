@@ -1,0 +1,40 @@
+FROM ubuntu:22.04
+
+# Установка Python и системных зависимостей
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gnupg2 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32 871920D1991BC93C \
+    && apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
+    python3.10-venv \
+    build-essential \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/bin/python3 /usr/bin/python
+
+# Создание рабочей директории
+WORKDIR /app
+
+# Копирование файлов зависимостей
+COPY requirements.txt .
+
+# Установка Python зависимостей
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Создание директории для моделей
+RUN mkdir -p /app/models
+
+# Копирование исходного кода
+COPY local_llm_server.py .
+
+# Открытие порта
+EXPOSE 8000
+
+# Запуск сервера
+CMD ["python", "local_llm_server.py"] 

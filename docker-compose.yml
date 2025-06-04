@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  llm-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.llm-server.alpine
+    container_name: llm-server
+    volumes:
+      - ./models:/app/models
+      - ./settings.ini:/app/settings.ini
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DEBIAN_FRONTEND=noninteractive
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: telegram-bot
+    volumes:
+      - ./settings.ini:/app/settings.ini
+      - ./.env:/app/.env
+    environment:
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      - llm-server
+    restart: unless-stopped
+
+volumes:
+  models:
+    driver: local 
