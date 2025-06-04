@@ -4,7 +4,7 @@ services:
   llm-server:
     build:
       context: .
-      dockerfile: Dockerfile.llm-server.alpine
+      dockerfile: Dockerfile.llm-server
     container_name: llm-server
     volumes:
       - ./models:/app/models
