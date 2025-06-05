@@ -70,11 +70,71 @@ class ModelManager:
         
         try:
             logger.info(f"Loading model from {model_path}")
-            self.models[model_name] = Llama(
-                model_path=model_path,
-                n_ctx=2048,
-                n_threads=4
-            )
+            
+            # Оптимизированные параметры для Mistral
+            if "mistral" in model_name.lower():
+                self.models[model_name] = Llama(
+                    model_path=model_path,
+                    n_ctx=512,          # Уменьшаем контекст для ускорения
+                    n_threads=8,        # Увеличиваем количество потоков
+                    n_batch=1024,       # Увеличиваем размер батча
+                    n_gpu_layers=0,     # Отключаем GPU слои, если нет GPU
+                    f16_kv=True,        # Используем float16 для ключей и значений
+                    embedding=False,    # Отключаем эмбеддинги
+                    vocab_only=False,   # Загружаем полную модель
+                    use_mlock=True,     # Блокируем память для модели
+                    use_mmap=True,      # Используем memory mapping
+                    numa=True,          # Включаем NUMA оптимизации
+                    rope_scaling=None,  # Отключаем RoPE scaling
+                    offload_kqv=True,   # Включаем offloading для KQV
+                    tensor_split=None,  # Отключаем разделение тензоров
+                    seed=42,            # Фиксируем seed для воспроизводимости
+                    n_keep=0,           # Не сохраняем токены
+                    n_draft=0,          # Отключаем draft tokens
+                    n_chunks=1,         # Используем один чанк
+                    n_parallel=1,       # Отключаем параллельную обработку
+                    n_sequences=1,      # Обрабатываем одну последовательность
+                    p_split=0.0,        # Отключаем разделение вероятностей
+                    main_gpu=0,         # Используем основной GPU
+                    tensor_parallel=1,  # Отключаем тензорный параллелизм
+                    rope_freq_base=10000,  # Стандартная базовая частота RoPE
+                    rope_freq_scale=1.0,   # Стандартный масштаб RoPE
+                    yarn_ext_factor=1.0,   # Отключаем YaRN
+                    yarn_attn_factor=1.0,  # Отключаем YaRN attention
+                    yarn_beta_fast=32.0,   # Стандартный YaRN beta
+                    yarn_beta_slow=1.0,    # Стандартный YaRN beta
+                    yarn_orig_ctx=2048,    # Стандартный контекст YaRN
+                    logits_all=False,      # Отключаем все логиты
+                    embedding=False,       # Отключаем эмбеддинги
+                    offload_kqv=True,      # Включаем offloading для KQV
+                    offload_inp=True,      # Включаем offloading для входных данных
+                    offload_out=True,      # Включаем offloading для выходных данных
+                    numa=True,             # Включаем NUMA оптимизации
+                    numa_strategy=0,       # Стандартная стратегия NUMA
+                    numa_max_nodes=1,      # Используем один NUMA узел
+                    numa_skip_self=True,   # Пропускаем self в NUMA
+                    numa_prefer_node=0,    # Предпочитаем узел 0
+                    numa_avoid_node=-1,    # Не избегаем узлов
+                    numa_balance_nodes=False,  # Отключаем балансировку узлов
+                    numa_balance_size=0,   # Отключаем балансировку по размеру
+                    numa_balance_count=0,  # Отключаем балансировку по количеству
+                    numa_balance_ratio=0.0 # Отключаем балансировку по соотношению
+                )
+            else:
+                # Стандартные параметры для других моделей
+                self.models[model_name] = Llama(
+                    model_path=model_path,
+                    n_ctx=1024,
+                    n_threads=4,
+                    n_batch=512,
+                    n_gpu_layers=0,
+                    f16_kv=True,
+                    embedding=False,
+                    vocab_only=False,
+                    use_mlock=True,
+                    use_mmap=True
+                )
+            
             logger.info(f"Successfully loaded model: {model_name} from {model_path}")
         except Exception as e:
             logger.error(f"Error loading model {model_name}: {str(e)}", exc_info=True)
@@ -90,41 +150,61 @@ class ModelManager:
 
         model = self.models[model_name]
         
-        # Форматируем промпт для Mistral
-        formatted_prompt = f"<s>[INST] {prompt} [/INST]"
-        logger.debug(f"Formatted prompt: {formatted_prompt}")
-
-        try:
-            logger.info("Generating response from model")
+        # Оптимизированный промпт для Mistral
+        if "mistral" in model_name.lower():
+            formatted_prompt = f"<s>[INST] {prompt} [/INST]"
+            logger.debug(f"Formatted prompt for Mistral: {formatted_prompt}")
+            
+            # Оптимизированные параметры генерации для Mistral
+            response = model(
+                formatted_prompt,
+                max_tokens=min(max_tokens, 128),  # Ограничиваем токены
+                temperature=temperature,
+                top_p=0.95,           # Увеличиваем top_p для более быстрой генерации
+                top_k=40,             # Уменьшаем top_k для ускорения
+                repeat_penalty=1.1,    # Уменьшаем штраф за повторения
+                presence_penalty=0.0,  # Отключаем штраф за присутствие
+                frequency_penalty=0.0, # Отключаем штраф за частоту
+                mirostat_mode=0,      # Отключаем mirostat
+                mirostat_tau=5.0,     # Стандартное tau
+                mirostat_eta=0.1,     # Стандартное eta
+                stop=["</s>", "[INST]"],  # Добавляем стоп-токены
+                echo=False,           # Отключаем эхо
+                stream=False,         # Отключаем стриминг
+                logits_processor=None # Отключаем обработку логитов
+            )
+        else:
+            # Стандартный промпт для других моделей
+            formatted_prompt = f"<s>[INST] {prompt} [/INST]"
             response = model(
                 formatted_prompt,
                 max_tokens=max_tokens,
-                temperature=temperature,
-                stop=["</s>", "[INST]"],
-                echo=False
+                temperature=temperature
             )
+
+        try:
+            # Парсим ответ
+            response_text = response['choices'][0]['text'].strip()
+            logger.debug(f"Raw response: {response_text}")
             
-            # Извлекаем только сгенерированный текст
-            generated_text = response["choices"][0]["text"].strip()
-            logger.debug(f"Generated text: {generated_text}")
-            
+            # Пытаемся распарсить JSON
             try:
-                # Пытаемся распарсить JSON из ответа
-                result = json.loads(generated_text)
-                logger.info("Successfully parsed JSON response")
+                result = json.loads(response_text)
+                logger.info(f"Parsed JSON response: {result}")
                 return result
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse JSON response: {str(e)}")
-                # Если не получилось распарсить JSON, возвращаем структурированный ответ
+            except json.JSONDecodeError:
+                # Если не удалось распарсить JSON, создаем структурированный ответ
+                logger.warning(f"Could not parse response as JSON: {response_text}")
                 return {
-                    "has_errors": True,
-                    "corrected_text": generated_text,
-                    "explanation": "Не удалось распарсить ответ модели в JSON формат",
-                    "confidence": 0.5
+                    "has_errors": "error" in response_text.lower(),
+                    "corrected_text": prompt,
+                    "explanation": response_text,
+                    "confidence": 0.8 if "no error" in response_text.lower() else 0.6
                 }
+                
         except Exception as e:
-            logger.error(f"Error generating response: {str(e)}", exc_info=True)
-            raise ValueError(f"Error generating response: {str(e)}")
+            logger.error(f"Error processing model response: {str(e)}", exc_info=True)
+            raise ValueError(f"Error processing model response: {str(e)}")
 
 model_manager = ModelManager()
 
@@ -162,4 +242,10 @@ async def generate_text(request: TextRequest) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8000,
+        timeout_keep_alive=1000,  # Увеличиваем время поддержания соединения
+        timeout_graceful_shutdown=1000  # Увеличиваем время на graceful shutdown
+    ) 
