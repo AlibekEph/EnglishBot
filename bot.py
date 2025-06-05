@@ -13,6 +13,7 @@ import asyncio
 from telegram.error import TimedOut, NetworkError, RetryAfter
 import backoff  # Добавим в requirements_bot.txt
 import json
+from requests.exceptions import RequestException, Timeout, ConnectionError
 
 # Настройка логирования
 logging.basicConfig(
@@ -34,6 +35,11 @@ class LLMProvider:
         self.local_model_url = "http://llm-server:8000"
         self.min_confidence = float(config['LLM']['MIN_CONFIDENCE'])
         self.use_openai = config.getboolean('OpenAI', 'USE_OPENAI', fallback=False)
+        
+        # Настройки для запросов
+        self.connect_timeout = 30  # таймаут на подключение
+        self.read_timeout = 500    # таймаут на чтение (3 минуты)
+        self.max_retries = 3       # максимальное количество попыток
         
         if self.use_openai:
             # Настройки для OpenAI
@@ -64,9 +70,10 @@ class LLMProvider:
         # Настраиваем сессию с повторными попытками
         self.session = requests.Session()
         retry_strategy = Retry(
-            total=3,
+            total=self.max_retries,
             backoff_factor=1,
-            status_forcelist=[500, 502, 503, 504]
+            status_forcelist=[500, 502, 503, 504],
+            allowed_methods=["POST"]
         )
         adapter = HTTPAdapter(max_retries=retry_strategy)
         self.session.mount("http://", adapter)
@@ -88,6 +95,13 @@ class LLMProvider:
             llm_logger.error(f"Error checking text: {str(e)}", exc_info=True)
             raise
 
+    @backoff.on_exception(
+        backoff.expo,
+        (Timeout, ConnectionError, RequestException),
+        max_tries=3,
+        max_time=300,
+        giveup=lambda e: isinstance(e, ValueError)  # Не повторяем попытки при ошибках валидации
+    )
     async def _check_with_local_model(self, text: str) -> Dict[str, Any]:
         """Проверка текста с помощью локальной модели"""
         if self.use_openai:
@@ -118,10 +132,12 @@ class LLMProvider:
                 "max_tokens": 256
             }
             llm_logger.debug(f"Sending request to local API: {self.local_model_url}/generate with data: {request_data}")
+            
+            # Используем увеличенные таймауты
             response = self.session.post(
                 f"{self.local_model_url}/generate",
                 json=request_data,
-                timeout=(30, 60)
+                timeout=(self.connect_timeout, self.read_timeout)
             )
             response.raise_for_status()
             
