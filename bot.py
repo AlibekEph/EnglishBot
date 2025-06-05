@@ -33,10 +33,7 @@ class LLMProvider:
         self.config = config
         self.local_model_url = "http://llm-server:8000"
         self.min_confidence = float(config['LLM']['MIN_CONFIDENCE'])
-        
-        # Читаем настройку USE_OPENAI
         self.use_openai = config.getboolean('OpenAI', 'USE_OPENAI', fallback=False)
-        llm_logger.info(f"USE_OPENAI setting: {self.use_openai}")
         
         if self.use_openai:
             # Настройки для OpenAI
@@ -44,7 +41,7 @@ class LLMProvider:
             self.openai_model = config['OpenAI']['MODEL']
             self.openai_max_tokens = int(config['OpenAI'].get('MAX_TOKENS', 150))
             self.openai_temperature = float(config['OpenAI'].get('TEMPERATURE', 0.7))
-            llm_logger.info(f"Initialized OpenAI settings: model={self.openai_model}, max_tokens={self.openai_max_tokens}, temperature={self.openai_temperature}")
+            llm_logger.info("Using OpenAI API with model: %s", self.openai_model)
         else:
             # Настройки для локальной модели
             self.default_model = config['LLM']['DEFAULT_MODEL']
@@ -61,7 +58,8 @@ class LLMProvider:
                 )
                 self.default_model = self.available_local_models[0]
             
-            llm_logger.info(f"Initialized local model settings: default_model={self.default_model}, available_models={self.available_local_models}")
+            llm_logger.info("Using local model server at: %s with model: %s", 
+                          self.local_model_url, self.default_model)
         
         # Настраиваем сессию с повторными попытками
         self.session = requests.Session()
@@ -113,15 +111,16 @@ class LLMProvider:
             )
             
             # Отправляем запрос к локальному API
-            llm_logger.debug(f"Sending request to local API: {self.local_model_url}/generate")
+            request_data = {
+                "model": self.default_model,
+                "text": prompt,
+                "temperature": 0.7,
+                "max_tokens": 256
+            }
+            llm_logger.debug(f"Sending request to local API: {self.local_model_url}/generate with data: {request_data}")
             response = self.session.post(
                 f"{self.local_model_url}/generate",
-                json={
-                    "model": self.default_model,
-                    "prompt": prompt,
-                    "temperature": 0.7,
-                    "max_tokens": 256
-                },
+                json=request_data,
                 timeout=(30, 60)
             )
             response.raise_for_status()
@@ -179,7 +178,6 @@ class LLMProvider:
                 "max_tokens": self.openai_max_tokens
             }
             
-            llm_logger.debug(f"Sending request to OpenAI API with model: {self.openai_model}")
             response = self.session.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers=headers,
@@ -299,17 +297,16 @@ class EnglishGrammarBot:
             chat_type = chat.type
             chat_id = chat.id
             user_id = message.from_user.id
-            username = message.from_user.username or message.from_user.first_name
+            username = message.from_user.username
 
             # Логируем информацию о сообщении
-            llm_logger.info(
+            telegram_logger.info(
                 f"Received message in {chat_type} chat {chat_id} "
-                f"from user {user_id} (@{username}): {message.text[:100]}..."
+                f"from user {user_id} (@{username}): {message.text[:50]}..."
             )
 
-            # Проверяем, является ли сообщение командой
+            # Игнорируем команды
             if message.text.startswith('/'):
-                llm_logger.debug(f"Ignoring command message: {message.text}")
                 return
 
             # Проверяем длину сообщения
@@ -369,7 +366,7 @@ class EnglishGrammarBot:
             llm_logger.info("Starting bot...")
             
             # Создаем приложение
-            application = Application.builder().token(self.token).build()
+            application = Application.builder().token(self.config['Telegram']['BOT_TOKEN']).build()
             
             # Добавляем обработчики
             application.add_handler(MessageHandler(
