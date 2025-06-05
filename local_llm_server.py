@@ -84,9 +84,7 @@ class ModelManager:
                     vocab_only=False,   # Загружаем полную модель
                     use_mlock=True,     # Блокируем память для модели
                     use_mmap=True,      # Используем memory mapping
-                    numa=True,          # Включаем NUMA оптимизации
                     rope_scaling=None,  # Отключаем RoPE scaling
-                    offload_kqv=True,   # Включаем offloading для KQV
                     tensor_split=None,  # Отключаем разделение тензоров
                     seed=42,            # Фиксируем seed для воспроизводимости
                     n_keep=0,           # Не сохраняем токены
@@ -105,7 +103,6 @@ class ModelManager:
                     yarn_beta_slow=1.0,    # Стандартный YaRN beta
                     yarn_orig_ctx=2048,    # Стандартный контекст YaRN
                     logits_all=False,      # Отключаем все логиты
-                    embedding=False,       # Отключаем эмбеддинги
                     offload_kqv=True,      # Включаем offloading для KQV
                     offload_inp=True,      # Включаем offloading для входных данных
                     offload_out=True,      # Включаем offloading для выходных данных

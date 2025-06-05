@@ -33,7 +33,10 @@ class LLMProvider:
         self.config = config
         self.local_model_url = "http://llm-server:8000"
         self.min_confidence = float(config['LLM']['MIN_CONFIDENCE'])
+        
+        # Читаем настройку USE_OPENAI
         self.use_openai = config.getboolean('OpenAI', 'USE_OPENAI', fallback=False)
+        llm_logger.info(f"USE_OPENAI setting: {self.use_openai}")
         
         if self.use_openai:
             # Настройки для OpenAI
@@ -41,7 +44,7 @@ class LLMProvider:
             self.openai_model = config['OpenAI']['MODEL']
             self.openai_max_tokens = int(config['OpenAI'].get('MAX_TOKENS', 150))
             self.openai_temperature = float(config['OpenAI'].get('TEMPERATURE', 0.7))
-            llm_logger.info("Using OpenAI API with model: %s", self.openai_model)
+            llm_logger.info(f"Initialized OpenAI settings: model={self.openai_model}, max_tokens={self.openai_max_tokens}, temperature={self.openai_temperature}")
         else:
             # Настройки для локальной модели
             self.default_model = config['LLM']['DEFAULT_MODEL']
@@ -58,8 +61,7 @@ class LLMProvider:
                 )
                 self.default_model = self.available_local_models[0]
             
-            llm_logger.info("Using local model server at: %s with model: %s", 
-                          self.local_model_url, self.default_model)
+            llm_logger.info(f"Initialized local model settings: default_model={self.default_model}, available_models={self.available_local_models}")
         
         # Настраиваем сессию с повторными попытками
         self.session = requests.Session()
@@ -72,51 +74,87 @@ class LLMProvider:
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
-    async def _check_with_local_model(self, text: str, model: str) -> dict:
-        """Проверка текста с помощью локальной модели"""
-        if model not in self.available_local_models:
-            raise ValueError(f"Model {model} not found in available models: {self.available_local_models}")
-            
-        max_retries = 3
-        retry_delay = 5  # секунд
-        
-        for attempt in range(max_retries):
-            try:
-                llm_logger.info(f"Checking text with local model {model} (attempt {attempt + 1}/{max_retries})")
-                
-                # Ограничиваем длину текста для проверки
-                if len(text) > 200:
-                    text = text[:200] + "..."
-                    llm_logger.warning(f"Text truncated to 200 characters")
-                
-                response = self.session.post(
-                    f"{self.local_model_url}/generate",
-                    json={
-                        "text": text,
-                        "model": model,
-                        "max_tokens": min(int(self.config['LLM']['MAX_TOKENS']), 128),
-                        "temperature": float(self.config['LLM']['TEMPERATURE'])
-                    },
-                    timeout=(30, 60)
-                )
-                response.raise_for_status()
-                result = response.json()
-                llm_logger.info(f"Local model response: {result}")
-                return result
-                
-            except requests.exceptions.RequestException as e:
-                llm_logger.error(f"Error calling local model (attempt {attempt + 1}/{max_retries}): {str(e)}")
-                if attempt < max_retries - 1:
-                    wait_time = retry_delay * (attempt + 1)
-                    llm_logger.info(f"Retrying in {wait_time} seconds...")
-                    time.sleep(wait_time)
-                else:
-                    raise Exception(f"Ошибка при обращении к локальной модели после {max_retries} попыток: {str(e)}")
-
-    async def _check_with_openai(self, text: str) -> dict:
-        """Проверка текста с помощью OpenAI API"""
+    async def check_text(self, text: str) -> Dict[str, Any]:
+        """Проверка текста на грамматические ошибки"""
         try:
-            llm_logger.info("Checking text with OpenAI API")
+            # Проверяем, какую модель использовать
+            if not self.use_openai:
+                llm_logger.info(f"Using local model {self.default_model} for text check")
+                return await self._check_with_local_model(text)
+            
+            # Если USE_OPENAI = true, используем OpenAI API
+            llm_logger.info(f"Using OpenAI API with model {self.openai_model} for text check")
+            return await self._check_with_openai(text)
+                
+        except Exception as e:
+            llm_logger.error(f"Error checking text: {str(e)}", exc_info=True)
+            raise
+
+    async def _check_with_local_model(self, text: str) -> Dict[str, Any]:
+        """Проверка текста с помощью локальной модели"""
+        if self.use_openai:
+            raise ValueError("Cannot use local model when USE_OPENAI is true")
+            
+        try:
+            llm_logger.info(f"Checking text with local model: {self.default_model}")
+            
+            # Проверяем, что модель доступна
+            if self.default_model not in self.available_local_models:
+                raise ValueError(f"Model {self.default_model} not found in available models: {self.available_local_models}")
+            
+            # Формируем промпт для проверки грамматики
+            prompt = (
+                "Check the following text for grammar, spelling, and punctuation errors. "
+                "If you find any errors, provide the corrected text and explain the corrections. "
+                "If the text is correct, respond with 'No errors found.' "
+                "Format your response as JSON with the following structure: "
+                '{"has_errors": boolean, "corrected_text": string, "explanation": string, "confidence": float (0-1)}\n\n'
+                f"Text to check: {text}"
+            )
+            
+            # Отправляем запрос к локальному API
+            llm_logger.debug(f"Sending request to local API: {self.local_model_url}/generate")
+            response = self.session.post(
+                f"{self.local_model_url}/generate",
+                json={
+                    "model": self.default_model,
+                    "prompt": prompt,
+                    "temperature": 0.7,
+                    "max_tokens": 256
+                },
+                timeout=(30, 60)
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            content = result['choices'][0]['text'].strip()
+            
+            try:
+                # Пытаемся распарсить JSON из ответа
+                parsed_result = json.loads(content)
+                llm_logger.info(f"Local model response: {parsed_result}")
+                return parsed_result
+            except json.JSONDecodeError:
+                # Если не удалось распарсить JSON, создаем структурированный ответ
+                llm_logger.warning(f"Could not parse local model response as JSON: {content}")
+                return {
+                    "has_errors": "error" in content.lower(),
+                    "corrected_text": text,
+                    "explanation": content,
+                    "confidence": 0.8 if "no error" in content.lower() else 0.6
+                }
+                
+        except requests.exceptions.RequestException as e:
+            llm_logger.error(f"Error calling local model API: {str(e)}", exc_info=True)
+            raise Exception(f"Ошибка при обращении к локальной модели: {str(e)}")
+
+    async def _check_with_openai(self, text: str) -> Dict[str, Any]:
+        """Проверка текста с помощью OpenAI API"""
+        if not self.use_openai:
+            raise ValueError("Cannot use OpenAI API when USE_OPENAI is false")
+            
+        try:
+            llm_logger.info(f"Checking text with OpenAI API using model: {self.openai_model}")
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.openai_api_key}"
@@ -141,6 +179,7 @@ class LLMProvider:
                 "max_tokens": self.openai_max_tokens
             }
             
+            llm_logger.debug(f"Sending request to OpenAI API with model: {self.openai_model}")
             response = self.session.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers=headers,
@@ -171,47 +210,38 @@ class LLMProvider:
             llm_logger.error(f"Error calling OpenAI API: {str(e)}", exc_info=True)
             raise Exception(f"Ошибка при обращении к OpenAI API: {str(e)}")
 
-    async def check_text(self, text: str) -> Dict[str, Any]:
-        """Проверка текста на грамматические ошибки"""
-        try:
-            if self.use_openai:
-                llm_logger.info("Using OpenAI API for text check")
-                return await self._check_with_openai(text)
-            else:
-                llm_logger.info(f"Using local model {self.default_model} for text check")
-                # Разбиваем длинный текст на предложения
-                if len(text) > 200:
-                    sentences = text.split('.')
-                    results = []
-                    for sentence in sentences:
-                        if sentence.strip():
-                            result = await self._check_with_local_model(sentence.strip(), self.default_model)
-                            results.append(result)
-                    
-                    # Объединяем результаты
-                    if results:
-                        has_errors = any(r.get('has_errors', False) for r in results)
-                        best_result = max(results, key=lambda x: x.get('confidence', 0))
-                        return {
-                            'has_errors': has_errors,
-                            'corrected_text': best_result.get('corrected_text', text),
-                            'explanation': best_result.get('explanation', ''),
-                            'confidence': best_result.get('confidence', 0)
-                        }
-                
-                return await self._check_with_local_model(text, self.default_model)
-                
-        except Exception as e:
-            llm_logger.error(f"Error checking text: {str(e)}", exc_info=True)
-            raise
-
 class EnglishGrammarBot:
     def __init__(self):
-        self.config = configparser.ConfigParser()
-        self.config.read('settings.ini')
-        self.llm = LLMProvider(self.config)
-        self.min_confidence = float(self.config['Bot']['MIN_CONFIDENCE'])
-        logger.info("Bot initialized with settings from settings.ini")
+        """Инициализация бота"""
+        try:
+            # Загружаем конфигурацию
+            self.config = configparser.ConfigParser()
+            config_path = os.path.join(os.path.dirname(__file__), 'settings.ini')
+            llm_logger.info(f"Loading configuration from: {config_path}")
+            
+            if not self.config.read(config_path):
+                raise ValueError(f"Could not read configuration file: {config_path}")
+            
+            # Проверяем наличие всех необходимых секций
+            required_sections = ['Telegram', 'LLM', 'OpenAI', 'LocalLLM', 'Bot']
+            for section in required_sections:
+                if section not in self.config:
+                    raise ValueError(f"Missing required section in settings.ini: {section}")
+            
+            # Инициализируем провайдер LLM
+            self.llm_provider = LLMProvider(self.config)
+            
+            # Настройки бота
+            self.token = self.config['Telegram']['BOT_TOKEN']
+            self.min_confidence = float(self.config['Bot']['MIN_CONFIDENCE'])
+            self.max_message_length = int(self.config['Bot']['MAX_MESSAGE_LENGTH'])
+            
+            llm_logger.info("Bot initialized successfully with settings from settings.ini")
+            llm_logger.info(f"USE_OPENAI setting: {self.llm_provider.use_openai}")
+            
+        except Exception as e:
+            llm_logger.error(f"Error initializing bot: {str(e)}", exc_info=True)
+            raise
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
@@ -256,129 +286,111 @@ class EnglishGrammarBot:
             logger.error(f"Error initializing bot: {str(e)}", exc_info=True)
             raise
 
-    def run(self):
-        """Запуск бота"""
-        logger.info("Starting bot...")
-        
-        # Создаем приложение с увеличенными таймаутами
-        application = (
-            Application.builder()
-            .token(self.config['Telegram']['BOT_TOKEN'])
-            .connect_timeout(30.0)  # Увеличиваем таймаут подключения
-            .read_timeout(30.0)     # Увеличиваем таймаут чтения
-            .write_timeout(30.0)    # Увеличиваем таймаут записи
-            .pool_timeout(30.0)     # Увеличиваем таймаут пула
-            .build()
-        )
-
-        # Добавляем обработчики
-        application.add_handler(CommandHandler("start", self.start))
-        application.add_handler(CommandHandler("help", self.help))
-        application.add_handler(MessageHandler(
-            filters.TEXT | filters.ChatType.GROUPS | filters.ChatType.SUPERGROUP,
-            self.process_message
-        ))
-
-        # Запускаем бота
+    async def process_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Обработка входящих сообщений"""
         try:
-            logger.info("Bot is ready to receive messages")
-            application.run_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True,  # Игнорируем старые обновления
-                pool_timeout=30.0,          # Таймаут для пула
-                read_timeout=30.0,          # Таймаут для чтения
-                write_timeout=30.0,         # Таймаут для записи
-                connect_timeout=30.0        # Таймаут для подключения
+            # Получаем информацию о сообщении
+            message = update.message
+            if not message or not message.text:
+                return
+
+            # Получаем информацию о чате
+            chat = message.chat
+            chat_type = chat.type
+            chat_id = chat.id
+            user_id = message.from_user.id
+            username = message.from_user.username or message.from_user.first_name
+
+            # Логируем информацию о сообщении
+            llm_logger.info(
+                f"Received message in {chat_type} chat {chat_id} "
+                f"from user {user_id} (@{username}): {message.text[:100]}..."
             )
-        except Exception as e:
-            logger.error(f"Error running bot: {str(e)}", exc_info=True)
-            # Даем время на корректное завершение
-            time.sleep(5)
-            # Перезапускаем бота
-            self.run()
 
-    @backoff.on_exception(
-        backoff.expo,
-        (TimedOut, NetworkError, RetryAfter),
-        max_tries=3,
-        max_time=60
-    )
-    async def process_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик входящих сообщений с повторными попытками"""
-        if not update.message or not update.message.text:
-            return
+            # Проверяем, является ли сообщение командой
+            if message.text.startswith('/'):
+                llm_logger.debug(f"Ignoring command message: {message.text}")
+                return
 
-        user = update.effective_user
-        chat = update.effective_chat
-        text = update.message.text
-
-        # Логируем информацию о чате и пользователе
-        chat_type = "private" if chat.type == "private" else f"{chat.type} ({chat.title})"
-        telegram_logger.info(
-            f"Message in {chat_type} from {user.id} ({user.username}): {text}"
-        )
-
-        # Проверяем, является ли сообщение командой
-        if text.startswith('/'):
-            telegram_logger.debug(f"Ignoring command message: {text}")
-            return
-
-        if len(text) > int(self.config['Bot']['MAX_MESSAGE_LENGTH']):
-            telegram_logger.warning(
-                f"Message too long from user {user.id} in {chat_type}: {len(text)} chars"
-            )
-            if chat.type == "private":  # Отвечаем только в личных сообщениях
-                await update.message.reply_text(
-                    f"Извините, сообщение слишком длинное. "
-                    f"Максимальная длина: {self.config['Bot']['MAX_MESSAGE_LENGTH']} символов."
-                )
-            return
-
-        try:
-            # Проверяем текст с помощью LLM
-            result = await self.llm.check_text(text)
-            
-            # Если уверенность ниже минимальной, игнорируем результат
-            if result['confidence'] < self.min_confidence:
-                telegram_logger.warning(
-                    f"Low confidence result ({result['confidence']}) for user {user.id} in {chat_type}"
+            # Проверяем длину сообщения
+            if len(message.text) > self.max_message_length:
+                await message.reply_text(
+                    f"Сообщение слишком длинное. Максимальная длина: {self.max_message_length} символов."
                 )
                 return
 
-            if result['has_errors']:
-                # Формируем ответ с исправлениями
-                response = (
-                    f"🔍 Найдены ошибки:\n\n"
-                    f"📝 Исправленный вариант:\n{result['corrected_text']}\n\n"
-                    f"📚 Объяснение:\n{result['explanation']}"
-                )
-                telegram_logger.info(
-                    f"Sending correction to user {user.id} in {chat_type}"
-                )
+            # Проверяем текст с помощью выбранной модели
+            try:
+                result = await self.llm_provider.check_text(message.text)
                 
-                # В групповых чатах отвечаем на сообщение
-                if chat.type != "private":
-                    await update.message.reply_text(
-                        response,
-                        reply_to_message_id=update.message.message_id
-                    )
+                if result.get('has_errors', False):
+                    # Формируем ответ с исправлениями
+                    corrected_text = result.get('corrected_text', '')
+                    explanation = result.get('explanation', '')
+                    confidence = result.get('confidence', 0.0)
+                    
+                    # Проверяем уверенность модели
+                    if confidence >= self.min_confidence:
+                        # Формируем сообщение с исправлениями
+                        response = f"💡 Исправленный текст:\n{corrected_text}\n\n"
+                        if explanation:
+                            response += f"📝 Объяснение:\n{explanation}"
+                        
+                        # Отправляем ответ
+                        await message.reply_text(response)
+                        llm_logger.info(
+                            f"Sent correction in {chat_type} chat {chat_id} "
+                            f"with confidence {confidence:.2f}"
+                        )
+                    else:
+                        llm_logger.debug(
+                            f"Confidence {confidence:.2f} below threshold {self.min_confidence}, "
+                            f"ignoring correction"
+                        )
                 else:
-                    await update.message.reply_text(response)
-            else:
-                telegram_logger.info(
-                    f"No errors found for user {user.id} in {chat_type}"
+                    llm_logger.debug("No errors found in the text")
+                    
+            except Exception as e:
+                llm_logger.error(f"Error checking text: {str(e)}", exc_info=True)
+                await message.reply_text(
+                    "Извините, произошла ошибка при проверке текста. Попробуйте позже."
                 )
+
+        except Exception as e:
+            llm_logger.error(f"Error processing message: {str(e)}", exc_info=True)
+            if message:
+                await message.reply_text(
+                    "Извините, произошла ошибка при обработке сообщения. Попробуйте позже."
+                )
+
+    def run(self):
+        """Запуск бота"""
+        try:
+            llm_logger.info("Starting bot...")
+            
+            # Создаем приложение
+            application = Application.builder().token(self.token).build()
+            
+            # Добавляем обработчики
+            application.add_handler(MessageHandler(
+                filters.TEXT & ~filters.COMMAND,  # Обрабатываем все текстовые сообщения, кроме команд
+                self.process_message
+            ))
+            
+            # Запускаем бота
+            llm_logger.info("Bot started successfully")
+            application.run_polling(
+                allowed_updates=Update.ALL_TYPES,  # Получаем все типы обновлений
+                drop_pending_updates=True,        # Игнорируем накопившиеся обновления при старте
+                connect_timeout=30,               # Таймаут подключения
+                read_timeout=30,                  # Таймаут чтения
+                write_timeout=30,                 # Таймаут записи
+                pool_timeout=30                   # Таймаут пула соединений
+            )
             
         except Exception as e:
-            logger.error(
-                f"Error processing message from user {user.id} in {chat_type}: {str(e)}",
-                exc_info=True
-            )
-            if chat.type == "private":  # Отвечаем только в личных сообщениях
-                await update.message.reply_text(
-                    "Извините, произошла ошибка при обработке сообщения. "
-                    "Пожалуйста, попробуйте позже."
-                )
+            llm_logger.error(f"Error running bot: {str(e)}", exc_info=True)
+            raise
 
 if __name__ == '__main__':
     # Загружаем переменные окружения
