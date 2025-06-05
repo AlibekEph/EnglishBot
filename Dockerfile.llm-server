@@ -1,18 +1,16 @@
-FROM python:3.12-slim
+FROM python:3.10-slim
 
-# Install system dependencies with proper authentication handling
-RUN apt-get update --allow-insecure-repositories && \
-    apt-get install -y --no-install-recommends --allow-unauthenticated \
-    gnupg \
-    dirmngr \
-    ca-certificates \
-    && apt-get update --allow-insecure-repositories && \
-    apt-get install -y --no-install-recommends --allow-unauthenticated \
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies including build tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
-    pkg-config \
-    python3-dev \
     git \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create working directory
@@ -21,18 +19,21 @@ WORKDIR /app
 # Copy dependency files
 COPY requirements.txt .
 
-# Modify requirements to use compatible versions for problematic packages
-RUN sed -i 's/sentencepiece==0.1.99/sentencepiece==0.1.97/g' requirements.txt && \
-    sed -i 's/llama-cpp-python==0.2.23/llama-cpp-python==0.2.19/g' requirements.txt
+# Create a minimal requirements file by excluding packages that need compilation
+# RUN grep -v "sentencepiece==" requirements.txt | \
+#     grep -v "llama-cpp-python==" | \
+#     grep -v "ctransformers==" | \
+#     grep -v "torch==" | \
+#     grep -v "tokenizers==" | \
+#     grep -v "transformers==" | \
+#     grep -v "accelerate==" > requirements_minimal.txt
 
-# Install Python dependencies with special handling for problematic packages
+# Install minimal Alpine build tools
+#RUN apk add --no-cache --virtual .build-deps gcc musl-dev
+
+# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
-    # Install pre-built versions first
-    pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir sentencepiece==0.1.97 && \
-    LLAMA_SUPPORTS_METAL=0 pip install --no-cache-dir llama-cpp-python==0.2.19 && \
-    # Install the rest of the requirements
-    pip install --no-cache-dir -r requirements.txt --ignore-installed sentencepiece llama-cpp-python
+    pip install --no-cache-dir -r requirements.txt
 
 # Create directory for models
 RUN mkdir -p /app/models
@@ -40,8 +41,12 @@ RUN mkdir -p /app/models
 # Copy source code
 COPY local_llm_server.py .
 
+# Add a stub for handling LLM calls
+#RUN echo 'print("Warning: Running in minimal mode, LLM features disabled")' >> stub_llm.py
+
 # Expose port
 EXPOSE 8000
 
-# Run server
+# Keep container running with tail -f /dev/null
+#CMD ["tail", "-f", "/dev/null"]
 CMD ["python", "local_llm_server.py"]

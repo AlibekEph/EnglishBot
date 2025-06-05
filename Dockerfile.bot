@@ -1,35 +1,23 @@
-FROM python:3.10-alpine
+FROM python:3.10-slim
 
-# Create working directory
+# Set working directory
 WORKDIR /app
 
-# Copy dependency files
-COPY requirements.txt .
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# Create a minimal requirements file by excluding packages that need compilation
-RUN grep -v "sentencepiece==" requirements.txt | \
-    grep -v "llama-cpp-python==" | \
-    grep -v "ctransformers==" | \
-    grep -v "torch==" | \
-    grep -v "tokenizers==" | \
-    grep -v "transformers==" | \
-    grep -v "accelerate==" > requirements_minimal.txt
+# Copy requirements file
+COPY requirements_bot.txt .
 
-# Install minimal Alpine build tools
-RUN apk add --no-cache --virtual .build-deps gcc musl-dev
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements_bot.txt && \
+    rm -rf /root/.cache/pip
 
-# Install basic Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements_minimal.txt && \
-    # Remove build dependencies
-    apk del .build-deps
+# Create stubs for all AI/ML functionality
 
-# Copy source code
-COPY bot.py .
-COPY settings.ini .
-
-# Add a stub for handling LLM calls
-RUN echo 'print("Warning: Running in minimal mode, LLM features disabled")' >> stub_llm.py
-
-# Run bot
-CMD ["python", "bot.py"]
+# Keep container running
+#CMD ["tail", "-f", "/dev/null"]
+CMD ["python3", "bot.py"]
